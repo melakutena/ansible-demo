@@ -27,7 +27,7 @@
             name: "{{ app_name }}"
             namespace: "{{ k8s_namespace }}"
           spec:
-            replicas: {{ replicas }}
+            replicas: "{{ replicas }}"
             selector:
               matchLabels:
                 app: nginx-demo
