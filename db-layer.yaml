@@ -1,0 +1,103 @@
+---
+- name: Deploy Database Layer (PostgreSQL)
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  tasks:
+    - name: Create Secret for Database Credentials
+      kubernetes.core.k8s:
+        state: present
+        namespace: "{{ target_namespace }}"
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: postgres-secret
+          type: Opaque
+          stringData:
+            POSTGRES_DB: "{{ db_name }}"
+            POSTGRES_USER: "{{ db_user }}"
+            POSTGRES_PASSWORD: "{{ db_password }}"
+
+    - name: Create PersistentVolumeClaim for Database
+      kubernetes.core.k8s:
+        state: present
+        namespace: "{{ target_namespace }}"
+        definition:
+          apiVersion: v1
+          kind: PersistentVolumeClaim
+          metadata:
+            name: postgres-pvc
+          spec:
+            accessModes:
+              - ReadWriteOnce
+            resources:
+              requests:
+                storage: 5Gi
+
+    - name: Deploy PostgreSQL Deployment
+      kubernetes.core.k8s:
+        state: present
+        namespace: "{{ target_namespace }}"
+        definition:
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: postgres-deployment
+            labels:
+              app: postgres
+          spec:
+            replicas: 1
+            selector:
+              matchLabels:
+                app: postgres
+            template:
+              metadata:
+                labels:
+                  app: postgres
+              spec:
+                containers:
+                  - name: postgres
+                    image: postgres:15-alpine
+                    ports:
+                      - containerPort: 5432
+                    envFrom:
+                      - secretRef:
+                          name: postgres-secret
+                    volumeMounts:
+                      - name: postgres-storage
+                        mountPath: /var/lib/postgresql/data
+                volumes:
+                  - name: postgres-storage
+                    persistentVolumeClaim:
+                      claimName: postgres-pvc
+
+    - name: Deploy PostgreSQL Internal Service
+      kubernetes.core.k8s:
+        state: present
+        namespace: "{{ target_namespace }}"
+        definition:
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: postgres-service
+          spec:
+            type: ClusterIP
+            ports:
+              - port: 5432
+                targetPort: 5432
+            selector:
+              app: postgres
+
+    - name: Wait for PostgreSQL deployment to reach Ready state
+      kubernetes.core.k8s_info:
+        kind: Deployment
+        name: postgres-deployment
+        namespace: "{{ target_namespace }}"
+      register: postgres_status
+      until: >
+        postgres_status.resources[0].status.readyReplicas is defined and
+        postgres_status.resources[0].status.readyReplicas == 1
+      retries: 12
+      delay: 5
